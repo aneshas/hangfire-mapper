@@ -5,6 +5,7 @@
     </PropertyGroup>
 
     <ItemGroup>
+      <PackageReference Include="Hangfire.Core" Version="1.7.10" />
       <PackageReference Include="Hangfire.Pro" Version="2.2.1" />
     </ItemGroup>
 

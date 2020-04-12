@@ -1,7 +1,5 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
-using System.Linq.Expressions;
 using FluentAssertions;
 using Hangfire.Batches.States;
 using Hangfire.Common;
@@ -14,18 +12,31 @@ namespace Hangfire.Mapper.Tests
 {
     public class MapperJobTests
     {
+        private readonly Mock<IResourceRepository> _repo;
+        private readonly Mock<IBatchJobClient> _batchClient;
+        private readonly Mock<INotificationRepository> _notificationRepo;
+
+        private readonly Resource _res1 = new Resource {Id = 1, Name = "John"};
+        private readonly Resource _res2 = new Resource {Id = 2, Name = "Jane"};
+        private readonly Resource _res3 = new Resource {Id = 3, Name = "Max"};
+
+        public MapperJobTests()
+        {
+            _repo = new Mock<IResourceRepository>();
+            _batchClient = new Mock<IBatchJobClient>();
+            _notificationRepo = new Mock<INotificationRepository>();
+        }
+
         [Fact]
         public void QueryIsCalledWithInitialState()
         {
             var initialPage = 1;
 
-            var repo = new Mock<IResourceRepository>();
-
-            var job = new DummyMapperJob(null, repo.Object);
+            var job = new DummyMapperJob(null, _repo.Object, null);
 
             job.Enqueue(new DummyMapperJob.State {Page = initialPage});
 
-            repo.Verify(r => r.List(initialPage), Times.Once);
+            _repo.Verify(r => r.List(initialPage), Times.Once);
         }
 
         [Fact]
@@ -33,27 +44,17 @@ namespace Hangfire.Mapper.Tests
         {
             var initialPage = 1;
 
-            var repo = new Mock<IResourceRepository>();
-
-            var res1 = new Resource() {Id = 1, Name = "John"};
-            var res2 = new Resource() {Id = 2, Name = "Jane"};
-            var res3 = new Resource() {Id = 3, Name = "Max"};
-
-            var resources = new[] {res1, res2, res3};
-
-            repo.Setup(r => r.List(initialPage)).ReturnsAsync(resources);
-
-            var batchClient = new Mock<IBatchJobClient>();
-
-            var job = new DummyMapperJob(batchClient.Object, repo.Object);
+            _repo.Setup(r => r.List(initialPage)).ReturnsAsync(new[] {_res1, _res2, _res3});
 
             Action<IBatchAction> action = null;
 
-            batchClient.Setup(
+            _batchClient.Setup(
                     client => client.Create(
                         It.IsAny<Action<IBatchAction>>(), It.IsAny<BatchStartedState>(), It.IsAny<string>()))
                 .Callback<Action<IBatchAction>, IBatchState, string>((a, state, d) => action = a)
                 .Returns("initial-batch-id");
+
+            var job = new DummyMapperJob(_batchClient.Object, _repo.Object, null);
 
             job.Enqueue(new DummyMapperJob.State {Page = initialPage});
 
@@ -68,7 +69,9 @@ namespace Hangfire.Mapper.Tests
 
                     Assert.NotNull(enqueuedJob);
 
-                    enqueuedJob.Args[0].Should().BeEquivalentTo(res1);
+                    enqueuedJob.Args[0].Should().BeEquivalentTo(_res1);
+                    enqueuedJob.Method.Name.Should().Be("Next");
+
                     jobA.Arguments[1].Should().BeOfType<EnqueuedState>();
                 },
                 jobB =>
@@ -77,7 +80,9 @@ namespace Hangfire.Mapper.Tests
 
                     Assert.NotNull(enqueuedJob);
 
-                    enqueuedJob.Args[0].Should().BeEquivalentTo(res2);
+                    enqueuedJob.Args[0].Should().BeEquivalentTo(_res2);
+                    enqueuedJob.Method.Name.Should().Be("Next");
+
                     jobB.Arguments[1].Should().BeOfType<EnqueuedState>();
                 },
                 jobC =>
@@ -86,7 +91,9 @@ namespace Hangfire.Mapper.Tests
 
                     Assert.NotNull(enqueuedJob);
 
-                    enqueuedJob.Args[0].Should().BeEquivalentTo(res3);
+                    enqueuedJob.Args[0].Should().BeEquivalentTo(_res3);
+                    enqueuedJob.Method.Name.Should().Be("Next");
+
                     jobC.Arguments[1].Should().BeOfType<EnqueuedState>();
                 });
         }
@@ -97,28 +104,18 @@ namespace Hangfire.Mapper.Tests
             var initialState = new DummyMapperJob.State {Page = 1};
             var nextState = new DummyMapperJob.State {Page = 2};
 
-            var repo = new Mock<IResourceRepository>();
+            _repo.Setup(r => r.List(initialState.Page)).ReturnsAsync(new[] {_res1, _res2, _res3});
 
-            var res1 = new Resource() {Id = 1, Name = "John"};
-            var res2 = new Resource() {Id = 2, Name = "Jane"};
-            var res3 = new Resource() {Id = 3, Name = "Max"};
-
-            var resources = new[] {res1, res2, res3};
-
-            repo.Setup(r => r.List(initialState.Page)).ReturnsAsync(resources);
-
-            var batchClient = new Mock<IBatchJobClient>();
-
-            var job = new DummyMapperJob(batchClient.Object, repo.Object);
+            var job = new DummyMapperJob(_batchClient.Object, _repo.Object, null);
 
             Action<IBatchAction> action = null;
 
-            batchClient.Setup(
+            _batchClient.Setup(
                     client => client.Create(
                         It.IsAny<Action<IBatchAction>>(), It.IsAny<BatchStartedState>(), It.IsAny<string>()))
                 .Returns("initial-batch-id");
 
-            batchClient.Setup(
+            _batchClient.Setup(
                     client => client.Create(
                         It.IsAny<Action<IBatchAction>>(), It.IsAny<BatchAwaitingState>(), null))
                 .Callback<Action<IBatchAction>, IBatchState, string>((a, state, d) => action = a);
@@ -143,35 +140,86 @@ namespace Hangfire.Mapper.Tests
         }
 
         [Fact]
+        public void OnJobStartedJobsAreScheduled()
+        {
+            var initialState = new DummyMapperJob.State {Page = 1};
+
+            _repo.Setup(r => r.List(initialState.Page)).ReturnsAsync(new[] {_res1});
+
+            Action<IBatchAction> action = null;
+
+            _batchClient.Setup(
+                    client => client.Create(
+                        It.IsAny<Action<IBatchAction>>(), It.IsAny<BatchStartedState>(), It.IsAny<string>()))
+                .Callback<Action<IBatchAction>, IBatchState, string>((a, state, d) => action = a)
+                .Returns("initial-batch-id");
+
+            var job = new DummyMapperJob(_batchClient.Object, _repo.Object, null);
+
+            job.Enqueue(initialState);
+
+            var batchAction = new Mock<IBatchAction>();
+
+            action(batchAction.Object);
+
+            batchAction.Invocations.Should().SatisfyRespectively(
+                markJobAsStartedJob =>
+                {
+                    // TODO - Reuse
+                    // TODO - test CallNotificationMethod 
+                    var enqueuedJob = markJobAsStartedJob.Arguments[0] as Job;
+
+                    Assert.NotNull(enqueuedJob);
+
+                    markJobAsStartedJob.Arguments[1].Should().BeOfType<EnqueuedState>();
+
+                    enqueuedJob.Args[0].Should().BeEquivalentTo("MarkJobAsStarted");
+                    enqueuedJob.Args[1].Should().BeEquivalentTo(initialState);
+                    enqueuedJob.Method.Name.Should().Be("CallNotificationMethod");
+                },
+                sendJobStartedEmailNotificationJob =>
+                {
+                    var enqueuedJob = sendJobStartedEmailNotificationJob.Arguments[0] as Job;
+
+                    Assert.NotNull(enqueuedJob);
+
+                    sendJobStartedEmailNotificationJob.Arguments[1].Should().BeOfType<EnqueuedState>();
+
+                    enqueuedJob.Args[0].Should().BeEquivalentTo("SendJobStartedEmailNotification");
+                    enqueuedJob.Args[1].Should().BeEquivalentTo(initialState);
+                    enqueuedJob.Method.Name.Should().Be("CallNotificationMethod");
+                },
+                jobA => { });
+        }
+        
+        // TODO - Test on started are scheduled only once
+        // TODO - Test on completed are called once at the end 
+
+        [Fact]
         public void NoJobsAreEnqueuedIfQueryReturnsNull()
         {
-            var repo = new Mock<IResourceRepository>();
+            _repo.Setup(r => r.List(It.IsAny<int>())).ReturnsAsync((IEnumerable<Resource>) null);
 
-            repo.Setup(r => r.List(It.IsAny<int>())).ReturnsAsync((IEnumerable<Resource>) null);
-
-            var batchClient = new Mock<IBatchJobClient>();
-
-            var job = new DummyMapperJob(batchClient.Object, repo.Object);
+            var job = new DummyMapperJob(_batchClient.Object, _repo.Object, null);
 
             job.Enqueue(new DummyMapperJob.State());
 
-            batchClient.VerifyNoOtherCalls();
+            _batchClient.VerifyNoOtherCalls();
         }
 
         [Fact]
         public void NoJobsAreEnqueuedIfQueryReturnsEmptySet()
         {
-            var repo = new Mock<IResourceRepository>();
+            _repo.Setup(r => r.List(It.IsAny<int>())).ReturnsAsync(new List<Resource>());
 
-            repo.Setup(r => r.List(It.IsAny<int>())).ReturnsAsync(new List<Resource>());
-
-            var batchClient = new Mock<IBatchJobClient>();
-
-            var job = new DummyMapperJob(batchClient.Object, repo.Object);
+            var job = new DummyMapperJob(_batchClient.Object, _repo.Object, null);
 
             job.Enqueue(new DummyMapperJob.State());
 
-            batchClient.VerifyNoOtherCalls();
+            _batchClient.VerifyNoOtherCalls();
         }
+        
+        // TODO - As an additional feature consider adding a context object that would context info about
+        // the complete job, eg. total number of batches etc...
     }
 }
