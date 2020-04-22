@@ -63,6 +63,8 @@ namespace Hangfire.Mapper.Tests
             action(batchAction.Object);
 
             batchAction.Invocations.Should().SatisfyRespectively(
+                markJobAsStartedJob => { },
+                sendJobStartedEmailNotificationJob => { },
                 jobA =>
                 {
                     var enqueuedJob = jobA.Arguments[0] as Job;
@@ -164,36 +166,40 @@ namespace Hangfire.Mapper.Tests
 
             batchAction.Invocations.Should().SatisfyRespectively(
                 markJobAsStartedJob =>
-                {
-                    // TODO - Reuse
-                    // TODO - test CallNotificationMethod 
-                    var enqueuedJob = markJobAsStartedJob.Arguments[0] as Job;
-
-                    Assert.NotNull(enqueuedJob);
-
-                    markJobAsStartedJob.Arguments[1].Should().BeOfType<EnqueuedState>();
-
-                    enqueuedJob.Args[0].Should().BeEquivalentTo("MarkJobAsStarted");
-                    enqueuedJob.Args[1].Should().BeEquivalentTo(initialState);
-                    enqueuedJob.Method.Name.Should().Be("CallNotificationMethod");
-                },
+                    AssertNotificationJobInvocationIsValid(
+                        markJobAsStartedJob,
+                        "MarkJobAsStarted",
+                        initialState),
                 sendJobStartedEmailNotificationJob =>
-                {
-                    var enqueuedJob = sendJobStartedEmailNotificationJob.Arguments[0] as Job;
-
-                    Assert.NotNull(enqueuedJob);
-
-                    sendJobStartedEmailNotificationJob.Arguments[1].Should().BeOfType<EnqueuedState>();
-
-                    enqueuedJob.Args[0].Should().BeEquivalentTo("SendJobStartedEmailNotification");
-                    enqueuedJob.Args[1].Should().BeEquivalentTo(initialState);
-                    enqueuedJob.Method.Name.Should().Be("CallNotificationMethod");
-                },
+                    AssertNotificationJobInvocationIsValid(
+                        sendJobStartedEmailNotificationJob,
+                        "SendJobStartedEmailNotification",
+                        initialState),
                 jobA => { });
         }
         
         // TODO - Test on started are scheduled only once
         // TODO - Test on completed are called once at the end 
+        // TODO - Test callNotificationMethod
+
+        // TODO - Scan attrs and throw if signatures are invalid
+        // TODO - Add correct licence
+
+        private void AssertNotificationJobInvocationIsValid(
+            IInvocation invocation,
+            string expectedJobName,
+            DummyMapperJob.State expectedState)
+        {
+            var enqueuedJob = invocation.Arguments[0] as Job;
+
+            Assert.NotNull(enqueuedJob);
+
+            invocation.Arguments[1].Should().BeOfType<EnqueuedState>();
+
+            enqueuedJob.Args[0].Should().BeEquivalentTo(expectedJobName);
+            enqueuedJob.Args[1].Should().BeEquivalentTo(expectedState);
+            enqueuedJob.Method.Name.Should().Be("CallNotificationMethod");
+        }
 
         [Fact]
         public void NoJobsAreEnqueuedIfQueryReturnsNull()
@@ -218,7 +224,7 @@ namespace Hangfire.Mapper.Tests
 
             _batchClient.VerifyNoOtherCalls();
         }
-        
+
         // TODO - As an additional feature consider adding a context object that would context info about
         // the complete job, eg. total number of batches etc...
     }
